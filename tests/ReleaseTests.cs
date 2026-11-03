@@ -90,7 +90,8 @@ internal static class ReleaseTests
         string legacy = Asset("v1.2.3", "LidAwake-v1.2.3.exe", 123, null);
         Assert(Parse(Json("v1.2.3"), "1.2.3.0").Download == null, "three- and four-part versions match");
         Assert(Parse(Json("v1.2.3", legacy, portable), "1.2.2.0").Download.Name.EndsWith("-Portable.exe"), "prefer portable asset");
-        Assert(Parse(Json("v1.2.3", legacy), "1.2.4.0").Download.Name == "LidAwake-v1.2.3.exe", "older latest release and legacy asset");
+        Assert(Parse(Json("v1.2.3", legacy), "1.2.4.0").Download == null, "automatic updates skip older releases");
+        Assert(Parse(Json("v1.2.3", legacy), "1.2.2.0").Download.Name == "LidAwake-v1.2.3.exe", "newer legacy asset is supported");
         ExpectFailure(() => Parse(Json("v1.2.3", Asset("v1.2.3", "LidAwake-v1.2.3-Setup.exe", 123, null)), "1.2.2.0"), "reject setup-only release");
         ExpectFailure(() => Parse(Json("v1.2.3", portable.Replace("github.com", "example.com")), "1.2.2.0"), "reject other asset host");
         ExpectFailure(() => Parse(Json("v1.2.3", portable.Replace("/Broklam/LidAwake/", "/attacker/LidAwake/")), "1.2.2.0"), "reject other repository");
@@ -151,16 +152,21 @@ internal static class ReleaseTests
         Assert(Installer.IsSetup("LidAwake-v1.1.1-Setup (1).exe"), "Windows duplicate setup name launches installer");
         Assert(Installer.IsSetup("LidAwake-v1.1.1-setup (12).exe"), "setup detection ignores case and accepts multi-digit duplicates");
         Assert(!Installer.IsSetup("LidAwake-v1.1.1-Portable (1).exe"), "duplicate portable remains standalone");
-        Assert(LaunchChoice.Resolve(portable, none, "", false) == LaunchAction.Ask, "first portable launch asks");
-        Assert(LaunchChoice.Resolve(portable, none, "standalone", false) == LaunchAction.Standalone, "remember standalone");
-        Assert(LaunchChoice.Resolve(portable, none, "installed", true) == LaunchAction.Installed, "remember installed");
-        Assert(LaunchChoice.Resolve(portable, none, "installed", false) == LaunchAction.Ask, "missing install returns to chooser");
-        Assert(LaunchChoice.Resolve(Installer.InstallPath, none, "", false) == LaunchAction.Standalone, "installed copy bypasses chooser");
-        Assert(LaunchChoice.Resolve(portable, new string[] { "--startup" }, "", false) == LaunchAction.Standalone, "startup bypasses chooser");
-        Assert(LaunchChoice.Resolve(portable, new string[] { "--update-ready", "file" }, "", false) == LaunchAction.Standalone, "update restart bypasses chooser");
+        string installed = Path.Combine(root, "custom install", "LidAwake.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(installed));
+        File.Copy(fixture, installed);
+        Assert(LaunchChoice.Resolve(portable, none, "", null) == LaunchAction.Ask, "first portable launch asks");
+        Assert(LaunchChoice.Resolve(portable, none, "standalone", null) == LaunchAction.Standalone, "remember standalone");
+        Assert(LaunchChoice.Resolve(portable, none, "installed", installed) == LaunchAction.Installed, "remember custom installation");
+        Assert(LaunchChoice.Resolve(portable, none, "installed", null) == LaunchAction.Ask, "missing install returns to chooser");
+        Assert(LaunchChoice.Resolve(installed, none, "", installed) == LaunchAction.Standalone, "custom installation bypasses chooser");
+        Assert(LaunchChoice.Resolve(portable, new string[] { "--startup" }, "", null) == LaunchAction.Standalone, "startup bypasses chooser");
+        Assert(LaunchChoice.Resolve(portable, new string[] { "--update-ready", "file" }, "", null) == LaunchAction.Standalone, "update restart bypasses chooser");
         string folder = Path.Combine(root, "settings");
         var settings = new AppSettings(folder, portable);
-        Assert(!settings.AutoUpdatesEnabled(), "automatic updates are opt-in");
+        Assert(settings.AutoUpdatesEnabled(), "automatic updates are enabled by default");
+        settings.SetAutoUpdates(false);
+        Assert(!settings.AutoUpdatesEnabled(), "an explicit automatic update opt-out persists");
         settings.SetAutoUpdates(true);
         Assert(settings.AutoUpdatesEnabled(), "automatic update setting persists");
         settings.SaveLaunchChoice("standalone");
@@ -175,7 +181,7 @@ internal static class ReleaseTests
         string app = Path.Combine(folder, "LidAwake.exe");
         string uninstaller = Path.Combine(folder, "Uninstall.exe");
         string shortcut = Path.Combine(folder, "Lid Awake.lnk");
-        Installer.InstallFiles(fixture, app, uninstaller);
+        Installer.InstallFiles(fixture, app, uninstaller, false);
         Assert(Hash(app) == Hash(fixture) && Hash(uninstaller) == Hash(fixture), "install creates separate app and uninstaller");
         Assert(!Installer.CanInstallOver(app, new Version(1, 2, 2, 0)), "setup refuses to replace a newer installed copy");
         Assert(Installer.CanInstallOver(app, new Version(1, 2, 3, 0)), "setup accepts the same version");
@@ -183,9 +189,12 @@ internal static class ReleaseTests
         Assert(File.Exists(shortcut), "install creates a Start menu shortcut");
         var values = Installer.RegistrationValues(app, uninstaller, new Version(1, 2, 3, 0));
         Assert((string)values["DisplayVersion"] == "1.2.3", "Apps version registration value");
+        Assert((string)values["InstallLocation"] == folder, "Apps records the selected folder");
         Assert((string)values["UninstallString"] == "\"" + uninstaller + "\" --uninstall", "Apps points to independent uninstaller");
         File.Copy(original, app, true);
         File.Copy(original, uninstaller, true);
+        ExpectFailure(() => Installer.InstallFiles(fixture, app, uninstaller, false), "fresh setup cannot overwrite existing files");
+        Assert(Hash(app) == Hash(original) && Hash(uninstaller) == Hash(original), "fresh setup leaves existing files intact");
         using (FileStream locked = new FileStream(uninstaller, FileMode.Open, FileAccess.Read, FileShare.None))
             ExpectFailure(() => Installer.InstallFiles(fixture, app, uninstaller), "setup stops when an existing uninstaller is locked");
         Assert(Hash(app) == Hash(original) && Hash(uninstaller) == Hash(original), "setup rolls back a partially replaced installation");
@@ -243,16 +252,16 @@ internal static class ReleaseTests
             return Task.FromResult(0);
         };
         var updates = new Updates(settings, folder, () => false, () => { throw new Exception("unexpected exit"); }, false, check, download);
-        updates.Check(true);
-        Assert(checks == 1 && downloads == 1 && updates.Status.Contains("downloaded"), "manual check downloads and queues an update");
-        updates.Check(true);
+        updates.SettingsSaved(false, true);
+        Assert(checks == 1 && downloads == 1 && updates.Status.Contains("ready"), "enabling automatic updates downloads and queues a newer release");
+        updates.Check();
         Assert(checks == 2 && downloads == 1, "a pending update still checks latest without re-downloading");
         updates.Dispose();
         var reloaded = new Updates(settings, folder, () => false, () => { throw new Exception("unexpected exit"); }, false, check, download);
-        reloaded.Check(true);
-        Assert(checks == 3 && downloads == 1 && reloaded.Status.Contains("downloaded"), "resumed pending update is rechecked");
+        reloaded.Check();
+        Assert(checks == 3 && downloads == 1 && reloaded.Status.Contains("ready"), "resumed pending update is rechecked");
         latest = new GitHubReleases.Result("v1.1.0", new Version(1, 1, 0, 0), null);
-        reloaded.Check(true);
+        reloaded.Check();
         Assert(reloaded.Status.Contains("up to date") &&
             Directory.GetFiles(Path.Combine(folder, "Updates"), "pending-*.txt").Length == 0,
             "a newer check clears a stale queued release when the installed version is latest");

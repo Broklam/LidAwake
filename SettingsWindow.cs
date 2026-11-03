@@ -11,7 +11,6 @@ namespace LidAwake
         private readonly CheckBox startup;
         private readonly CheckBox autoUpdate;
         private readonly Label updateStatus;
-        private readonly Button checkUpdates;
         private bool savedAutoUpdate;
 
         internal SettingsWindow(AppSettings settings, Icon icon, Updates updates)
@@ -27,7 +26,7 @@ namespace LidAwake
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
-            ClientSize = new Size(482, 333);
+            ClientSize = new Size(482, 297);
 
             var startupGroup = new GroupBox { Text = "Startup", Location = new Point(16, 14), Size = new Size(450, 78) };
             startup = new CheckBox { Text = "Start Lid Awake when I sign in to Windows", AutoSize = true, Location = new Point(15, 24) };
@@ -39,27 +38,26 @@ namespace LidAwake
             };
             startupGroup.Controls.AddRange(new Control[] { startup, startupHint });
 
-            var updatesGroup = new GroupBox { Text = "Updates", Location = new Point(16, 104), Size = new Size(450, 177) };
+            var updatesGroup = new GroupBox { Text = "Updates", Location = new Point(16, 104), Size = new Size(450, 141) };
             autoUpdate = new CheckBox { Text = "Automatically check for and install updates", AutoSize = true, Location = new Point(15, 25) };
             var versionLabel = new Label
             {
                 Text = "Version " + typeof(SettingsWindow).Assembly.GetName().Version.ToString(3),
-                Bounds = new Rectangle(298, 53, 136, 20),
+                Bounds = new Rectangle(298, 50, 136, 20),
                 TextAlign = ContentAlignment.MiddleRight,
                 ForeColor = SystemColors.GrayText
             };
-            checkUpdates = new Button { Text = "Check for &updates", Bounds = new Rectangle(15, 52, 132, 28) };
             updateStatus = new Label
             {
-                Bounds = new Rectangle(15, 90, 419, 74),
+                Bounds = new Rectangle(15, 75, 419, 56),
                 UseMnemonic = false,
                 ForeColor = SystemColors.GrayText
             };
-            updatesGroup.Controls.AddRange(new Control[] { autoUpdate, versionLabel, checkUpdates, updateStatus });
+            updatesGroup.Controls.AddRange(new Control[] { autoUpdate, versionLabel, updateStatus });
 
-            var save = new Button { Text = "&Save", Bounds = new Rectangle(302, 293, 77, 28) };
-            var cancel = new Button { Text = "Cancel", Bounds = new Rectangle(389, 293, 77, 28), DialogResult = DialogResult.Cancel };
-            var resetChoice = new Button { Text = "Show install options next time", Bounds = new Rectangle(16, 293, 210, 28) };
+            var save = new Button { Text = "&Save", Bounds = new Rectangle(302, 257, 77, 28) };
+            var cancel = new Button { Text = "Cancel", Bounds = new Rectangle(389, 257, 77, 28), DialogResult = DialogResult.Cancel };
+            var resetChoice = new Button { Text = "Show install options next time", Bounds = new Rectangle(16, 257, 210, 28) };
             Controls.AddRange(new Control[] { startupGroup, updatesGroup, resetChoice, save, cancel });
             AcceptButton = save;
             CancelButton = cancel;
@@ -77,7 +75,6 @@ namespace LidAwake
                 updateStatus.Text = "The automatic update setting could not be read.";
             }
 
-            checkUpdates.Click += (sender, args) => updates.Check(true);
             resetChoice.Click += (sender, args) =>
             {
                 try
@@ -99,10 +96,9 @@ namespace LidAwake
 
         private void UpdateStatus(object sender, EventArgs args)
         {
-            if (IsDisposed) return;
-            checkUpdates.Enabled = !updates.Busy;
+            if (IsDisposed || !autoUpdate.Enabled) return;
             updateStatus.Text = string.IsNullOrEmpty(updates.Status)
-                ? "Checks the latest published release from Broklam/LidAwake on GitHub."
+                ? (savedAutoUpdate ? "Lid Awake restarts when a newer release is ready." : "Automatic updates are off.")
                 : updates.Status;
         }
 

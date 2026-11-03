@@ -26,7 +26,7 @@ namespace LidAwake
             if (args.Length > 0 && args[0] == "--uninstall") { Installer.Uninstall(); return; }
             if ((args.Length > 0 && args[0] == "--install") || Installer.IsSetup(Application.ExecutablePath))
             {
-                Installer.Install(true);
+                Installer.Install();
                 return;
             }
             string dataFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -99,7 +99,8 @@ namespace LidAwake
             UpdateIcon();
             icon.Visible = true;
             updates = new Updates(settings, dataFolder,
-                () => !exiting && !menuOpen && !lid.IsOn && !lid.NeedsRestore, ExitForUpdate, updateFailed);
+                () => !exiting && !menuOpen && settingsWindow == null && !lid.IsOn && !lid.NeedsRestore,
+                ExitForUpdate, updateFailed);
         }
 
         private string Status

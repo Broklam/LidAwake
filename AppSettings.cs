@@ -41,8 +41,8 @@ namespace LidAwake
         internal bool AutoUpdatesEnabled()
         {
             try { return string.Equals(File.ReadAllText(autoUpdateFile).Trim(), "true", StringComparison.OrdinalIgnoreCase); }
-            catch (FileNotFoundException) { return false; }
-            catch (DirectoryNotFoundException) { return false; }
+            catch (FileNotFoundException) { return true; }
+            catch (DirectoryNotFoundException) { return true; }
         }
 
         internal void SetAutoUpdates(bool enabled)

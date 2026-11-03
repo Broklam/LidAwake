@@ -31,7 +31,7 @@ namespace LidAwake
         private CancellationTokenSource activeCheck;
         private bool disposed;
         internal event EventHandler Changed;
-        internal bool Busy { get; private set; }
+        private bool busy;
         internal string Status { get; private set; }
 
         internal Updates(AppSettings settings, string dataFolder, Func<bool> canApply, Action exitForUpdate, bool updateFailed)
@@ -53,8 +53,8 @@ namespace LidAwake
             timer.Tick += (sender, args) =>
             {
                 timer.Interval = 21600000; // Check again every six hours while the app is running.
-                if (pending != null) { Check(pendingManual); return; }
-                try { if (settings.AutoUpdatesEnabled()) Check(false); }
+                if (pending != null) { Check(); return; }
+                try { if (settings.AutoUpdatesEnabled()) Check(); }
                 catch (Exception error) { SetStatus("Couldn't read the automatic update setting: " + error.Message); }
             };
             timer.Start();
@@ -69,22 +69,17 @@ namespace LidAwake
                     canceledBySettings = true;
                     activeCheck.Cancel();
                 }
-                if (pending != null && !pendingManual)
-                { ClearPending(); SetStatus("Automatic update canceled."); }
+                if (pending != null && !pendingManual) ClearPending();
+                if (pending == null) SetStatus("Automatic updates are off.");
             }
-            if (!wasEnabled && isEnabled) Check(false);
+            if (!wasEnabled && isEnabled) Check();
         }
 
-        internal async void Check(bool manual)
+        internal async void Check()
         {
-            if (Busy || disposed) return;
-            if (pending != null && manual && !pendingManual)
-            {
-                try { SavePending(pending, Path.GetDirectoryName(staged), true); pendingManual = true; }
-                catch (Exception error) { SetStatus("Couldn't save the pending update: " + error.Message); return; }
-            }
-            Busy = true;
-            activeManual = manual;
+            if (busy || disposed) return;
+            busy = true;
+            activeManual = pending != null && pendingManual;
             canceledBySettings = false;
             activeCheck = CancellationTokenSource.CreateLinkedTokenSource(cancellation.Token);
             activeCheck.CancelAfter(TimeSpan.FromMinutes(5));
@@ -95,10 +90,12 @@ namespace LidAwake
             {
                 GitHubReleases.Result result = await checkRelease(
                     typeof(Updates).Assembly.GetName().Version, activeCheck.Token);
+                if (disposed) return;
+                activeCheck.Token.ThrowIfCancellationRequested();
                 if (result.Download == null)
                 {
                     ClearPending();
-                    SetStatus("You're up to date. Latest release: " + result.Tag + ".");
+                    SetStatus("You're up to date.");
                     return;
                 }
                 if (pending != null && pending.Version.Equals(result.Version))
@@ -114,12 +111,11 @@ namespace LidAwake
                 await downloadRelease(result, download, activeCheck.Token);
                 if (disposed) return;
                 activeCheck.Token.ThrowIfCancellationRequested();
-                bool preserveManual = manual || (pending != null && pendingManual);
-                SavePending(result, directory, preserveManual);
+                SavePending(result, directory, activeManual);
                 string oldDirectory = staged == null ? null : Path.GetDirectoryName(staged);
                 pending = result;
                 staged = download;
-                pendingManual = preserveManual;
+                pendingManual = activeManual;
                 pendingNeedsCheck = false;
                 directory = null;
                 if (oldDirectory != null) DeleteDirectory(oldDirectory);
@@ -127,7 +123,7 @@ namespace LidAwake
             }
             catch (OperationCanceledException)
             {
-                if (!disposed) SetStatus(canceledBySettings ? "Automatic update canceled." : "The update check timed out. Try again.");
+                if (!disposed) SetStatus(canceledBySettings ? "Automatic updates are off." : "The update check timed out. Lid Awake will retry automatically.");
             }
             catch (HttpRequestException error)
             {
@@ -146,7 +142,7 @@ namespace LidAwake
                 if (directory != null) DeleteDirectory(directory);
                 activeCheck.Dispose();
                 activeCheck = null;
-                Busy = false;
+                busy = false;
                 Notify();
                 if (applyAfterCheck && !disposed) TryApply();
             }
@@ -155,15 +151,15 @@ namespace LidAwake
         internal bool TryApply()
         {
             if (disposed || pending == null) return false;
-            if (Busy) return false;
+            if (busy) return false;
             if (pendingNeedsCheck)
             {
-                if (canApply()) Check(pendingManual);
+                if (canApply()) Check();
                 return false;
             }
             if (!canApply())
             {
-                SetStatus("Release " + pending.Tag + " is downloaded. It will install when the lid override is off and the tray menu is closed.");
+                SetStatus("Release " + pending.Tag + " is ready. It will install when Settings and the tray menu are closed and the lid override is off.");
                 return false;
             }
             try
@@ -299,7 +295,7 @@ namespace LidAwake
             {
                 try { File.Delete(PendingFile); } catch (IOException) { } catch (UnauthorizedAccessException) { }
                 if (directory != null) DeleteDirectory(directory);
-                if (!discard) Status = "The saved update could not be read. Check for updates again.";
+                if (!discard) Status = "The saved update could not be read.";
             }
         }
 

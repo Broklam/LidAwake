@@ -10,14 +10,14 @@ namespace LidAwake
 
     internal static class LaunchChoice
     {
-        internal static LaunchAction Resolve(string executable, string[] args, string remembered, bool installationExists)
+        internal static LaunchAction Resolve(string executable, string[] args, string remembered, string installedPath)
         {
-            if (string.Equals(Path.GetFullPath(executable), Path.GetFullPath(Installer.InstallPath), StringComparison.OrdinalIgnoreCase) ||
+            if (string.Equals(Path.GetFullPath(executable), installedPath, StringComparison.OrdinalIgnoreCase) ||
                 Array.IndexOf(args, "--startup") >= 0 || Array.IndexOf(args, "--update-ready") >= 0 ||
                 Array.IndexOf(args, "--update-failed") >= 0)
                 return LaunchAction.Standalone;
             if (remembered == "standalone") return LaunchAction.Standalone;
-            if (remembered == "installed" && installationExists) return LaunchAction.Installed;
+            if (remembered == "installed" && File.Exists(installedPath)) return LaunchAction.Installed;
             return LaunchAction.Ask;
         }
 
@@ -27,13 +27,14 @@ namespace LidAwake
             try { remembered = settings.LoadLaunchChoice(); }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
-            LaunchAction action = Resolve(Application.ExecutablePath, args, remembered, File.Exists(Installer.InstallPath));
+            string installedPath = Installer.InstallPath;
+            LaunchAction action = Resolve(Application.ExecutablePath, args, remembered, installedPath);
             if (action == LaunchAction.Standalone) return true;
             if (action == LaunchAction.Installed)
             {
                 try
                 {
-                    Process.Start(new ProcessStartInfo(Installer.InstallPath) { UseShellExecute = true });
+                    Process.Start(new ProcessStartInfo(installedPath) { UseShellExecute = true });
                     return false;
                 }
                 catch (Exception error)
@@ -46,7 +47,7 @@ namespace LidAwake
             {
                 if (dialog.ShowDialog() != DialogResult.OK) return false;
                 bool standalone = dialog.Standalone;
-                if (!standalone && !Installer.Install(false)) return false;
+                if (!standalone && !Installer.Install()) return false;
                 try
                 {
                     if (dialog.Remember) settings.SaveLaunchChoice(standalone ? "standalone" : "installed");

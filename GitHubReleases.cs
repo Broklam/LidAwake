@@ -48,7 +48,7 @@ namespace LidAwake
             if (!Version.TryParse(number, out latest))
                 throw new InvalidDataException("The latest release tag could not be compared: " + release.Tag + ".");
             latest = Normalize(latest);
-            if (latest.Equals(Normalize(installed))) return new Result(release.Tag, latest, null);
+            if (latest <= Normalize(installed)) return new Result(release.Tag, latest, null);
 
             Asset selected = null;
             if (release.Assets != null)
