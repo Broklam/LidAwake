@@ -42,7 +42,8 @@ try {
         '/resource:assets/lid-off.ico,lid-off.ico', '/resource:assets/lid-on.ico,lid-on.ico',
         '/reference:System.Drawing.dll', '/reference:System.Windows.Forms.dll', '/reference:System.Net.Http.dll',
         '/reference:System.Runtime.Serialization.dll',
-        $programPath, 'LidOverride.cs', 'WindowsPower.cs', 'AppSettings.cs', 'GitHubReleases.cs', 'SettingsWindow.cs'
+        $programPath, 'LidOverride.cs', 'WindowsPower.cs', 'AppSettings.cs', 'GitHubReleases.cs',
+        'Installer.cs', 'LaunchChoice.cs', 'Updates.cs', 'SettingsWindow.cs'
     )
     & $compiler @arguments
     if ($LASTEXITCODE -ne 0) { throw "Build failed with exit code $LASTEXITCODE." }

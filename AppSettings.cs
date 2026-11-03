@@ -6,29 +6,49 @@ namespace LidAwake
 {
     internal sealed class AppSettings
     {
-        private const string DefaultRepository = "Broklam/LidAwake";
         private const string StartupKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         private const string StartupValue = "Lid Awake";
-        private readonly string repositoryFile;
+        private readonly string autoUpdateFile;
+        private readonly string launchChoiceFile;
         private readonly string executablePath;
 
         internal AppSettings(string dataFolder, string executablePath)
         {
-            repositoryFile = Path.Combine(dataFolder, "update-repository.txt");
+            autoUpdateFile = Path.Combine(dataFolder, "auto-update.txt");
+            launchChoiceFile = Path.Combine(dataFolder, "launch-choice.txt");
             this.executablePath = executablePath;
         }
 
-        internal string LoadRepository()
+        internal string LoadLaunchChoice()
         {
-            try { return File.ReadAllText(repositoryFile).Trim(); }
-            catch (FileNotFoundException) { return DefaultRepository; }
-            catch (DirectoryNotFoundException) { return DefaultRepository; }
+            try { return File.ReadAllText(launchChoiceFile).Trim(); }
+            catch (FileNotFoundException) { return ""; }
+            catch (DirectoryNotFoundException) { return ""; }
         }
 
-        internal void SaveRepository(string repository)
+        internal void SaveLaunchChoice(string choice)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(repositoryFile));
-            File.WriteAllText(repositoryFile, repository);
+            if (choice != "standalone" && choice != "installed") throw new ArgumentException("Invalid launch choice.");
+            Directory.CreateDirectory(Path.GetDirectoryName(launchChoiceFile));
+            File.WriteAllText(launchChoiceFile, choice);
+        }
+
+        internal void ClearLaunchChoice()
+        {
+            if (File.Exists(launchChoiceFile)) File.Delete(launchChoiceFile);
+        }
+
+        internal bool AutoUpdatesEnabled()
+        {
+            try { return string.Equals(File.ReadAllText(autoUpdateFile).Trim(), "true", StringComparison.OrdinalIgnoreCase); }
+            catch (FileNotFoundException) { return false; }
+            catch (DirectoryNotFoundException) { return false; }
+        }
+
+        internal void SetAutoUpdates(bool enabled)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(autoUpdateFile));
+            File.WriteAllText(autoUpdateFile, enabled ? "true" : "false");
         }
 
         internal bool StartsWithWindows()
@@ -51,6 +71,17 @@ namespace LidAwake
             {
                 using (RegistryKey key = Registry.CurrentUser.OpenSubKey(StartupKey, writable: true))
                     if (key != null) key.DeleteValue(StartupValue, throwOnMissingValue: false);
+            }
+        }
+
+        internal static void RemoveStartupFor(string path)
+        {
+            using (RegistryKey key = Registry.CurrentUser.OpenSubKey(StartupKey, writable: true))
+            {
+                if (key == null) return;
+                string command = key.GetValue(StartupValue) as string;
+                if (string.Equals(command, "\"" + path + "\" --startup", StringComparison.OrdinalIgnoreCase))
+                    key.DeleteValue(StartupValue, throwOnMissingValue: false);
             }
         }
     }

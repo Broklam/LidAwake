@@ -1,11 +1,5 @@
 using System;
-using System.ComponentModel;
-using System.Diagnostics;
 using System.Drawing;
-using System.Net.Http;
-using System.Runtime.Serialization;
-using System.Threading;
-using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace LidAwake
@@ -13,19 +7,17 @@ namespace LidAwake
     internal sealed class SettingsWindow : Form
     {
         private readonly AppSettings settings;
-        private readonly Version version = typeof(SettingsWindow).Assembly.GetName().Version;
+        private readonly Updates updates;
         private readonly CheckBox startup;
-        private readonly TextBox repository;
+        private readonly CheckBox autoUpdate;
         private readonly Label updateStatus;
         private readonly Button checkUpdates;
-        private readonly LinkLabel releaseLink;
-        private string savedRepository = "";
-        private CancellationTokenSource pendingCheck;
-        private Uri releasePage;
+        private bool savedAutoUpdate;
 
-        internal SettingsWindow(AppSettings settings, Icon icon)
+        internal SettingsWindow(AppSettings settings, Icon icon, Updates updates)
         {
             this.settings = settings;
+            this.updates = updates;
             Text = "Lid Awake Settings";
             Icon = icon;
             Font = SystemFonts.MessageBoxFont;
@@ -35,7 +27,7 @@ namespace LidAwake
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
-            ClientSize = new Size(482, 332);
+            ClientSize = new Size(482, 333);
 
             var startupGroup = new GroupBox { Text = "Startup", Location = new Point(16, 14), Size = new Size(450, 78) };
             startup = new CheckBox { Text = "Start Lid Awake when I sign in to Windows", AutoSize = true, Location = new Point(15, 24) };
@@ -47,29 +39,28 @@ namespace LidAwake
             };
             startupGroup.Controls.AddRange(new Control[] { startup, startupHint });
 
-            var updatesGroup = new GroupBox { Text = "Updates", Location = new Point(16, 104), Size = new Size(450, 176) };
-            var sourceLabel = new Label { Text = "GitHub &repository", AutoSize = true, Location = new Point(15, 25) };
+            var updatesGroup = new GroupBox { Text = "Updates", Location = new Point(16, 104), Size = new Size(450, 177) };
+            autoUpdate = new CheckBox { Text = "Automatically check for and install updates", AutoSize = true, Location = new Point(15, 25) };
             var versionLabel = new Label
             {
-                Text = "Version " + version.ToString(3),
-                Bounds = new Rectangle(298, 23, 136, 20),
+                Text = "Version " + typeof(SettingsWindow).Assembly.GetName().Version.ToString(3),
+                Bounds = new Rectangle(298, 53, 136, 20),
                 TextAlign = ContentAlignment.MiddleRight,
                 ForeColor = SystemColors.GrayText
             };
-            repository = new TextBox { Bounds = new Rectangle(15, 46, 419, 23), MaxLength = 250, AccessibleName = "GitHub repository" };
-            checkUpdates = new Button { Text = "Check for &updates", Bounds = new Rectangle(15, 79, 132, 28) };
-            releaseLink = new LinkLabel { Text = "View release on GitHub", AutoSize = true, Location = new Point(160, 86), Visible = false };
+            checkUpdates = new Button { Text = "Check for &updates", Bounds = new Rectangle(15, 52, 132, 28) };
             updateStatus = new Label
             {
-                Bounds = new Rectangle(15, 117, 419, 49),
+                Bounds = new Rectangle(15, 90, 419, 74),
                 UseMnemonic = false,
                 ForeColor = SystemColors.GrayText
             };
-            updatesGroup.Controls.AddRange(new Control[] { sourceLabel, versionLabel, repository, checkUpdates, releaseLink, updateStatus });
+            updatesGroup.Controls.AddRange(new Control[] { autoUpdate, versionLabel, checkUpdates, updateStatus });
 
             var save = new Button { Text = "&Save", Bounds = new Rectangle(302, 293, 77, 28) };
             var cancel = new Button { Text = "Cancel", Bounds = new Rectangle(389, 293, 77, 28), DialogResult = DialogResult.Cancel };
-            Controls.AddRange(new Control[] { startupGroup, updatesGroup, save, cancel });
+            var resetChoice = new Button { Text = "Show install options next time", Bounds = new Rectangle(16, 293, 210, 28) };
+            Controls.AddRange(new Control[] { startupGroup, updatesGroup, resetChoice, save, cancel });
             AcceptButton = save;
             CancelButton = cancel;
 
@@ -79,115 +70,53 @@ namespace LidAwake
                 startup.Enabled = false;
                 startupHint.Text = "Windows startup settings are unavailable.";
             }
-            try
-            {
-                savedRepository = settings.LoadRepository();
-                repository.Text = savedRepository;
-                ResetUpdateStatus();
-            }
+            try { savedAutoUpdate = autoUpdate.Checked = settings.AutoUpdatesEnabled(); }
             catch (Exception)
             {
-                updateStatus.Text = "The saved GitHub repository could not be read.";
+                autoUpdate.Enabled = false;
+                updateStatus.Text = "The automatic update setting could not be read.";
             }
 
-            repository.TextChanged += (sender, args) => ResetUpdateStatus();
-            checkUpdates.Click += CheckForUpdates;
-            releaseLink.LinkClicked += OpenRelease;
-            save.Click += SaveSettings;
-            cancel.Click += (sender, args) => Close();
-        }
-
-        private void ResetUpdateStatus()
-        {
-            releasePage = null;
-            releaseLink.Visible = false;
-            updateStatus.Text = string.IsNullOrWhiteSpace(repository.Text)
-                ? "Enter the public repository that publishes Lid Awake releases (owner/repo or a GitHub URL)."
-                : "";
-        }
-
-        private async void CheckForUpdates(object sender, EventArgs args)
-        {
-            string source;
-            ResetUpdateStatus();
-            if (!GitHubReleases.TryNormalizeRepository(repository.Text, out source))
+            checkUpdates.Click += (sender, args) => updates.Check(true);
+            resetChoice.Click += (sender, args) =>
             {
-                updateStatus.Text = "Enter a public GitHub repository as owner/repo or a github.com URL.";
-                repository.Focus();
-                return;
-            }
-
-            pendingCheck = new CancellationTokenSource();
-            using (var request = pendingCheck)
-            {
-                checkUpdates.Enabled = false;
-                repository.ReadOnly = true;
-                updateStatus.Text = "Checking GitHub for the latest release…";
                 try
                 {
-                    GitHubReleases.Result result = await GitHubReleases.CheckAsync(source, version, request.Token);
-                    if (!request.IsCancellationRequested && !IsDisposed)
-                    {
-                        updateStatus.Text = result.Message;
-                        releasePage = result.Page;
-                        releaseLink.Visible = releasePage != null;
-                    }
+                    settings.ClearLaunchChoice();
+                    updateStatus.Text = "Install options will appear on the next manual standalone launch.";
                 }
-                catch (TaskCanceledException)
+                catch (Exception error)
                 {
-                    if (!request.IsCancellationRequested && !IsDisposed)
-                        updateStatus.Text = "The update check timed out. Try again.";
+                    MessageBox.Show(this, "Couldn't reset the launch choice.\r\n\r\n" + error.Message,
+                        Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
-                catch (HttpRequestException)
-                {
-                    if (!request.IsCancellationRequested && !IsDisposed)
-                        updateStatus.Text = "Couldn't reach GitHub. Check your connection and try again.";
-                }
-                catch (SerializationException)
-                {
-                    if (!request.IsCancellationRequested && !IsDisposed)
-                        updateStatus.Text = "GitHub returned a release that couldn't be read.";
-                }
-                finally
-                {
-                    pendingCheck = null;
-                    if (!IsDisposed)
-                    {
-                        repository.ReadOnly = false;
-                        checkUpdates.Enabled = true;
-                    }
-                }
-            }
+            };
+            save.Click += SaveSettings;
+            cancel.Click += (sender, args) => Close();
+            updates.Changed += UpdateStatus;
+            UpdateStatus(this, EventArgs.Empty);
         }
 
-        private void OpenRelease(object sender, LinkLabelLinkClickedEventArgs args)
+        private void UpdateStatus(object sender, EventArgs args)
         {
-            if (releasePage == null) return;
-            try { Process.Start(new ProcessStartInfo(releasePage.AbsoluteUri) { UseShellExecute = true }); }
-            catch (Win32Exception)
-            {
-                updateStatus.Text = "Windows couldn't open the release page in your browser.";
-            }
+            if (IsDisposed) return;
+            checkUpdates.Enabled = !updates.Busy;
+            updateStatus.Text = string.IsNullOrEmpty(updates.Status)
+                ? "Checks the latest published release from Broklam/LidAwake on GitHub."
+                : updates.Status;
         }
 
         private void SaveSettings(object sender, EventArgs args)
         {
-            string source = "";
-            if (!string.IsNullOrWhiteSpace(repository.Text) && !GitHubReleases.TryNormalizeRepository(repository.Text, out source))
-            {
-                updateStatus.Text = "Enter a public GitHub repository as owner/repo or a github.com URL.";
-                repository.Focus();
-                return;
-            }
             try
             {
-                if (!string.Equals(source, savedRepository, StringComparison.Ordinal))
-                {
-                    settings.SaveRepository(source);
-                    savedRepository = source;
-                }
                 if (startup.Enabled && (startup.Checked || settings.StartsWithWindows()))
                     settings.SetStartsWithWindows(startup.Checked);
+                if (autoUpdate.Enabled && autoUpdate.Checked != savedAutoUpdate)
+                    settings.SetAutoUpdates(autoUpdate.Checked);
+                bool wasEnabled = savedAutoUpdate;
+                savedAutoUpdate = autoUpdate.Checked;
+                updates.SettingsSaved(wasEnabled, savedAutoUpdate);
                 Close();
             }
             catch (Exception error)
@@ -199,7 +128,7 @@ namespace LidAwake
 
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
-            if (pendingCheck != null) pendingCheck.Cancel();
+            updates.Changed -= UpdateStatus;
             base.OnFormClosed(e);
         }
     }

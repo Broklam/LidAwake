@@ -21,10 +21,20 @@ namespace LidAwake
         private static void Main(string[] args)
         {
             Application.EnableVisualStyles();
+            if (args.Length > 0 && args[0] == "--apply-update") { UpdateHelper.Apply(args); return; }
+            if (args.Length > 0 && args[0] == "--finish-uninstall") { Installer.FinishUninstall(args); return; }
+            if (args.Length > 0 && args[0] == "--uninstall") { Installer.Uninstall(); return; }
+            if ((args.Length > 0 && args[0] == "--install") || Installer.IsSetup(Application.ExecutablePath))
+            {
+                Installer.Install(true);
+                return;
+            }
+            string dataFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "LidAwake");
+            var settings = new AppSettings(dataFolder, Application.ExecutablePath);
+            if (!LaunchChoice.ContinueWithStandalone(settings, args)) return;
             bool first;
-            string userSid;
-            using (WindowsIdentity identity = WindowsIdentity.GetCurrent()) userSid = identity.User.Value;
-            using (var instance = new Mutex(true, @"Global\LidAwake." + userSid, out first))
+            using (var instance = new Mutex(true, UserMutexName(), out first))
             {
                 if (!first)
                 {
@@ -34,12 +44,23 @@ namespace LidAwake
                     return;
                 }
 
-                string dataFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "LidAwake");
                 var lid = new LidOverride(Path.Combine(dataFolder, "restore.txt"));
-                using (var tray = new Tray(lid, new AppSettings(dataFolder, Application.ExecutablePath)))
+                using (var tray = new Tray(lid, settings, dataFolder,
+                    Array.IndexOf(args, "--update-failed") >= 0))
+                {
+                    int ready = Array.IndexOf(args, "--update-ready");
+                    if (ready >= 0 && ready + 1 < args.Length)
+                    {
+                        try { File.WriteAllText(args[ready + 1], "ready"); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+                    }
                     Application.Run(tray);
+                }
             }
+        }
+
+        internal static string UserMutexName()
+        {
+            using (WindowsIdentity identity = WindowsIdentity.GetCurrent()) return @"Global\LidAwake." + identity.User.Value;
         }
     }
 
@@ -56,14 +77,17 @@ namespace LidAwake
         private readonly Icon offIcon;
         private readonly Icon onIcon;
         private readonly System.Windows.Forms.Timer timer;
+        private readonly Updates updates;
         private SettingsWindow settingsWindow;
         private bool menuOpen;
+        private bool applyingUpdate;
+        private bool exiting;
 
-        internal Tray(LidOverride lid, AppSettings settings)
+        internal Tray(LidOverride lid, AppSettings settings, string dataFolder, bool updateFailed)
         {
             this.lid = lid;
             this.settings = settings;
-            owner = new TrayWindow(RestoreForShutdown);
+            owner = new TrayWindow(EndSession);
             offIcon = LoadIcon("lid-off.ico");
             onIcon = LoadIcon("lid-on.ico");
             icon = new NotifyIcon();
@@ -74,6 +98,8 @@ namespace LidAwake
             catch (Exception error) { ShowError("Could not restore the previous lid settings.", error); }
             UpdateIcon();
             icon.Visible = true;
+            updates = new Updates(settings, dataFolder,
+                () => !exiting && !menuOpen && !lid.IsOn && !lid.NeedsRestore, ExitForUpdate, updateFailed);
         }
 
         private string Status
@@ -99,6 +125,7 @@ namespace LidAwake
         {
             if (menuOpen || (e.Button != MouseButtons.Left && e.Button != MouseButtons.Right)) return;
             CheckForChanges(this, EventArgs.Empty);
+            if (applyingUpdate) return;
             menuOpen = true;
             IntPtr menu = CreatePopupMenu();
             uint command = 0;
@@ -147,6 +174,7 @@ namespace LidAwake
                         "Could not turn on Lid Awake.", error);
                 }
                 finally { UpdateIcon(); }
+                updates.TryApply();
             }
             else if (command == SettingsCommand)
             {
@@ -161,17 +189,23 @@ namespace LidAwake
                     UpdateIcon();
                     return;
                 }
+                exiting = true;
                 if (settingsWindow != null) settingsWindow.Close();
                 ExitThread();
             }
+            else updates.TryApply();
         }
 
         private void ShowSettings()
         {
             if (settingsWindow == null)
             {
-                settingsWindow = new SettingsWindow(settings, offIcon);
-                settingsWindow.FormClosed += (sender, args) => settingsWindow = null;
+                settingsWindow = new SettingsWindow(settings, offIcon, updates);
+                settingsWindow.FormClosed += (sender, args) =>
+                {
+                    settingsWindow = null;
+                    if (!exiting && !applyingUpdate) updates.TryApply();
+                };
                 settingsWindow.Show();
             }
             settingsWindow.Activate();
@@ -180,6 +214,7 @@ namespace LidAwake
         private void CheckForChanges(object sender, EventArgs e)
         {
             string message = null;
+            bool wasOn = lid.IsOn;
             ToolTipIcon notification = ToolTipIcon.Warning;
             try
             {
@@ -200,12 +235,26 @@ namespace LidAwake
             }
             UpdateIcon();
             if (message != null) icon.ShowBalloonTip(5000, AppName, message, notification);
+            if (wasOn && !lid.IsOn) updates.TryApply();
+        }
+
+        private void ExitForUpdate()
+        {
+            applyingUpdate = true;
+            if (settingsWindow != null) settingsWindow.Close();
+            ExitThread();
         }
 
         private void RestoreForShutdown()
         {
             try { lid.Restore(); }
             catch { /* A saved snapshot will be retried the next time the app opens. */ }
+        }
+
+        private void EndSession()
+        {
+            exiting = true;
+            RestoreForShutdown();
         }
 
         private static void ShowError(string message, Exception error)
@@ -224,7 +273,9 @@ namespace LidAwake
         {
             if (disposing)
             {
+                exiting = true;
                 if (settingsWindow != null) settingsWindow.Close();
+                updates.Dispose();
                 timer.Dispose();
                 icon.Dispose();
                 owner.DestroyHandle();
